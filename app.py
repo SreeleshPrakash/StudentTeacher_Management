@@ -106,6 +106,39 @@ def delete_student(student_id):
     return jsonify({'message': 'Student deleted successfully'})
 
 
+@app.route('/student/<int:student_id>/teachers', methods=['GET'])
+def get_teachers(student_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        cur.execute('''
+            SELECT t.id, t.name, t.subject
+            FROM teacher_management t
+            JOIN student_teacher st ON t.id = st.teacher_id
+            WHERE st.student_id = %s;
+        ''', (student_id,))
+        teachers = cur.fetchall()
+
+        teacher_list = []
+        for teacher in teachers:
+            teacher_dict = {
+                'id': teacher[0],
+                'name': teacher[1],
+                'subject': teacher[2]
+            }
+            teacher_list.append(teacher_dict)
+
+    except Exception as e:
+        cur.close()
+        conn.close()
+        return jsonify({'error': str(e)}), 500
+
+    cur.close()
+    conn.close()
+    return jsonify({'teachers': teacher_list})
+
+
 # ========================================================================================
 
 
@@ -246,3 +279,106 @@ def get_students_by_teacher(teacher_id):
     conn.close()
 
     return jsonify(student_list)
+
+
+# ==========================================================================================================
+
+# Mapp a student with a teacher
+@app.route('/student/<int:student_id>/connect/<int:teacher_id>', methods=['POST'])
+def connect_student_teacher(student_id, teacher_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT id FROM student_management WHERE id = %s;",
+                (student_id,))
+    student = cur.fetchone()
+
+    cur.execute("SELECT id FROM teacher_management WHERE id = %s;",
+                (teacher_id,))
+    teacher = cur.fetchone()
+
+    if not student:
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'Student not found'}), 404
+
+    if not teacher:
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'Teacher not found'}), 404
+
+    try:
+        cur.execute(
+            "INSERT INTO student_teacher (student_id, teacher_id) VALUES (%s, %s);", (student_id, teacher_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return jsonify({'error': str(e)}), 500
+
+    cur.close()
+    conn.close()
+    return jsonify({'message': 'Student connected to teacher successfully'})
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+# Mapp a teacher with multiple students in the list of studentIds
+@app.route('/teacher/<int:teacher_id>/connect', methods=['POST'])
+def connect_teacher_with_students(teacher_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Check if the teacher exists
+    cur.execute("SELECT id FROM teacher_management WHERE id = %s;",
+                (teacher_id,))
+    teacher = cur.fetchone()
+
+    if not teacher:
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'Teacher not found'}), 404
+
+    # Get list of studentIds
+    data = request.get_json()
+    student_ids = data.get('student_ids', [])
+
+    if not isinstance(student_ids, list):
+        cur.close()
+        conn.close()
+        return jsonify({'error': 'student_ids must be a list'}), 400
+
+    successful_connections = []
+    errors = []
+
+    for student_id in student_ids:
+        cur.execute(
+            "SELECT id FROM student_management WHERE id = %s;", (student_id,))
+        student = cur.fetchone()
+
+        if not student:
+            errors.append({'student_id': student_id,
+                          'error': 'Student not found'})
+            continue
+
+        try:
+            cur.execute(
+                "INSERT INTO student_teacher (student_id, teacher_id) VALUES (%s, %s);", (student_id, teacher_id))
+            successful_connections.append(student_id)
+        except Exception as e:
+            conn.rollback()
+            errors.append({'student_id': student_id, 'error': str(e)})
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    response = {
+        'message': 'Connections processed',
+        'successful_connections': successful_connections,
+        'errors': errors
+    }
+    return jsonify(response)
